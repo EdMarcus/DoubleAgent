@@ -45,10 +45,17 @@ INT wmain(IN SIZE_T nArgc, IN PCWSTR *ppcwszArgv)
 {
 	DOUBLEAGENT_STATUS eStatus = DOUBLEAGENT_STATUS_INVALID_VALUE;
 
+	/* Prints usage */
+	if (1 == nArgc)
+	{
+		(VOID)wprintf(L"Usage:\tDoubleAgent.exe install\\uninstall\\repair process_name\n");
+		(VOID)wprintf(L"e.g.\tDoubleAgent.exe install cmd.exe\n");
+		return 0;
+	}
+
 	/* Validates the arguments */
 	if (DOUBLEAGENT_ARGUMENTS_COUNT != nArgc)
 	{
-		(VOID)wprintf(L"Usage: DoubleAgent.exe action_type process_name\n");
 		DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_WMAIN_INVALID_ARGS_COUNT);
 		goto lbl_cleanup;
 	}
