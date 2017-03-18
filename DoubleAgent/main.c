@@ -1,6 +1,5 @@
 /* Includes ******************************************************************/
 #include <Windows.h>
-#include <PathCch.h>
 #include <stdio.h>
 #include <crtdbg.h>
 #include "Path.h"
@@ -128,16 +127,16 @@ static DOUBLEAGENT_STATUS main_Install(IN PCWSTR *ppcwszArgv)
 	}
 
 	/* Gets the x86 verifier dll path */
-	if (FALSE == SUCCEEDED(PathAllocCombine(pwszExeDirPath, DOUBLEAGENT_VERIFIER_DLL_RELATIVE_PATH_X86, 0, &pwszVerifierDllPathX86)))
+	eStatus = PATH_Combine(pwszExeDirPath, DOUBLEAGENT_VERIFIER_DLL_RELATIVE_PATH_X86, &pwszVerifierDllPathX86);
+	if (FALSE == DOUBLEAGENT_SUCCESS(eStatus))
 	{
-		DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_MAIN_INSTALL_PATHALLOCCOMBINE_FAILED_X86);
 		goto lbl_cleanup;
 	}
 
 	/* Gets the x64 verifier dll path */
-	if (FALSE == SUCCEEDED(PathAllocCombine(pwszExeDirPath, DOUBLEAGENT_VERIFIER_DLL_RELATIVE_PATH_X64, 0, &pwszVerifierDllPathX64)))
+	eStatus = PATH_Combine(pwszExeDirPath, DOUBLEAGENT_VERIFIER_DLL_RELATIVE_PATH_X64, &pwszVerifierDllPathX64);
+	if (FALSE == DOUBLEAGENT_SUCCESS(eStatus))
 	{
-		DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_MAIN_INSTALL_PATHALLOCCOMBINE_FAILED_X64);
 		goto lbl_cleanup;
 	}
 
@@ -155,14 +154,14 @@ lbl_cleanup:
 	/* Frees the x64 verifier dll path */
 	if (NULL != pwszVerifierDllPathX64)
 	{
-		(VOID)LocalFree(pwszVerifierDllPathX64);
+		(VOID)HeapFree(GetProcessHeap(), 0, pwszVerifierDllPathX64);
 		pwszVerifierDllPathX64 = NULL;
 	}
 
 	/* Frees the x86 verifier dll path */
 	if (NULL != pwszVerifierDllPathX86)
 	{
-		(VOID)LocalFree(pwszVerifierDllPathX86);
+		(VOID)HeapFree(GetProcessHeap(), 0, pwszVerifierDllPathX86);
 		pwszVerifierDllPathX86 = NULL;
 	}
 

@@ -1,10 +1,10 @@
 /* Includes ******************************************************************/
 #include <Windows.h>
-#include <Pathcch.h>
 #include <Shlwapi.h>
 #include <crtdbg.h>
 #include "Status.h"
 #include "OS.h"
+#include "Path.h"
 #include "Verifier.h"
 
 /* Macros ********************************************************************/
@@ -30,12 +30,12 @@ static DOUBLEAGENT_STATUS verifier_Register(IN PCWSTR pcwszProcessName, IN PCWST
 static VOID verifier_Unregister(IN PCWSTR pcwszProcessName);
 /*
  * Gets the installation path for the x86 verifier dll
- * The installation path must be freed via LocalFree
+ * The installation path must be freed via HeapFree
  */
 static DOUBLEAGENT_STATUS verifier_GetInstallPathX86(IN PCWSTR pcwszVrfDllName, OUT PVOID *ppwszVrfDllInstallPath);
 /*
  * Gets the installation path for the x64 verifier dll
- * The installation path must be freed via LocalFree
+ * The installation path must be freed via HeapFree
  */
 static DOUBLEAGENT_STATUS verifier_GetInstallPathX64(IN PCWSTR pcwszVrfDllName, OUT PVOID *ppwszVrfDllInstallPath);
 
@@ -143,14 +143,14 @@ lbl_cleanup:
 	/* Frees the x86 install path */
 	if (NULL != pwszVrfDllInstallPathX86)
 	{
-		(VOID)LocalFree(pwszVrfDllInstallPathX86);
+		(VOID)HeapFree(GetProcessHeap(), 0, pwszVrfDllInstallPathX86);
 		pwszVrfDllInstallPathX86 = NULL;
 	}
 
 	/* Frees the x64 install path */
 	if (NULL != pwszVrfDllInstallPathX64)
 	{
-		(VOID)LocalFree(pwszVrfDllInstallPathX64);
+		(VOID)HeapFree(GetProcessHeap(), 0, pwszVrfDllInstallPathX64);
 		pwszVrfDllInstallPathX64 = NULL;
 	}
 
@@ -225,7 +225,7 @@ VOID VERIFIER_Uninstall(IN PCWSTR pcwszProcessName, IN PCWSTR pcwszVrfDllName)
 					(VOID)DeleteFileW(pwszVrfDllInstallPathX64);
 
 					/* Frees the x64 install path */
-					(VOID)LocalFree(pwszVrfDllInstallPathX64);
+					(VOID)HeapFree(GetProcessHeap(), 0, pwszVrfDllInstallPathX64);
 					pwszVrfDllInstallPathX64 = NULL;
 				}
 				/* Falls into the x86 case */
@@ -237,7 +237,7 @@ VOID VERIFIER_Uninstall(IN PCWSTR pcwszProcessName, IN PCWSTR pcwszVrfDllName)
 					(VOID)DeleteFileW(pwszVrfDllInstallPathX86);
 
 					/* Frees the x86 install path */
-					(VOID)LocalFree(pwszVrfDllInstallPathX86);
+					(VOID)HeapFree(GetProcessHeap(), 0, pwszVrfDllInstallPathX86);
 					pwszVrfDllInstallPathX86 = NULL;
 				}
 				break;
@@ -394,9 +394,9 @@ static DOUBLEAGENT_STATUS verifier_GetInstallPathX86(IN PCWSTR pcwszVrfDllName, 
 	 * x86 OS - Path should be System32
 	 * x64 OS - Path should be SysWOW64 (File system redirection would implicitly convert System32 to SysWOW64)
 	 */
-	if (FALSE == SUCCEEDED(PathAllocCombine(VERIFIER_SYSTEM32_PATH, pcwszVrfDllName, 0, &pwszVrfDllInstallPathLocal)))
+	eStatus = PATH_Combine(VERIFIER_SYSTEM32_PATH, pcwszVrfDllName, &pwszVrfDllInstallPathLocal);
+	if (FALSE == DOUBLEAGENT_SUCCESS(eStatus))
 	{
-		DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_VERIFIER_GETINSTALLPATHX86_PATHALLOCCOMBINE_FAILED_X86);
 		goto lbl_cleanup;
 	}
 #else
@@ -404,9 +404,9 @@ static DOUBLEAGENT_STATUS verifier_GetInstallPathX86(IN PCWSTR pcwszVrfDllName, 
 	 * x86 OS - Impossible (Can't run x64 code on x86 OS)
 	 * x64 OS - Path should be SysWOW64
 	 */
-	if (FALSE == SUCCEEDED(PathAllocCombine(VERIFIER_SYSWOW64_PATH, pcwszVrfDllName, 0, &pwszVrfDllInstallPathLocal)))
+	eStatus = PATH_Combine(VERIFIER_SYSWOW64_PATH, pcwszVrfDllName, &pwszVrfDllInstallPathLocal);
+	if (FALSE == DOUBLEAGENT_SUCCESS(eStatus))
 	{
-		DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_VERIFIER_GETINSTALLPATHX86_PATHALLOCCOMBINE_FAILED_X64);
 		goto lbl_cleanup;
 	}
 #endif
@@ -422,7 +422,7 @@ lbl_cleanup:
 	/* Frees the install path */
 	if (NULL != pwszVrfDllInstallPathLocal)
 	{
-		(VOID)LocalFree(pwszVrfDllInstallPathLocal);
+		(VOID)HeapFree(GetProcessHeap(), 0, pwszVrfDllInstallPathLocal);
 		pwszVrfDllInstallPathLocal = NULL;
 	}
 
@@ -441,16 +441,16 @@ static DOUBLEAGENT_STATUS verifier_GetInstallPathX64(IN PCWSTR pcwszVrfDllName, 
 
 #ifndef _WIN64
 	/* x64 OS - Path should be System32 (File system redirection would implicitly convert Sysnative to System32) */
-	if (FALSE == SUCCEEDED(PathAllocCombine(VERIFIER_SYSNATIVE_PATH, pcwszVrfDllName, 0, &pwszVrfDllInstallPathLocal)))
+	eStatus = PATH_Combine(VERIFIER_SYSNATIVE_PATH, pcwszVrfDllName, &pwszVrfDllInstallPathLocal);
+	if (FALSE == DOUBLEAGENT_SUCCESS(eStatus))
 	{
-		DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_VERIFIER_GETINSTALLPATHX64_PATHALLOCCOMBINE_FAILED_X86);
 		goto lbl_cleanup;
 	}
 #else
 	/* x64 OS - Path should be System32 */
-	if (FALSE == SUCCEEDED(PathAllocCombine(VERIFIER_SYSTEM32_PATH, pcwszVrfDllName, 0, &pwszVrfDllInstallPathLocal)))
+	eStatus = PATH_Combine(VERIFIER_SYSTEM32_PATH, pcwszVrfDllName, &pwszVrfDllInstallPathLocal);
+	if (FALSE == DOUBLEAGENT_SUCCESS(eStatus))
 	{
-		DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_VERIFIER_GETINSTALLPATHX64_PATHALLOCCOMBINE_FAILED_X64);
 		goto lbl_cleanup;
 	}
 #endif
@@ -466,7 +466,7 @@ lbl_cleanup:
 	/* Frees the install path */
 	if (NULL != pwszVrfDllInstallPathLocal)
 	{
-		(VOID)LocalFree(pwszVrfDllInstallPathLocal);
+		(VOID)HeapFree(GetProcessHeap(), 0, pwszVrfDllInstallPathLocal);
 		pwszVrfDllInstallPathLocal = NULL;
 	}
 
